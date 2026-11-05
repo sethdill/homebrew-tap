@@ -1,0 +1,74 @@
+name: Homebrew
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  formula:
+    name: Formula (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-26-intel, ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Homebrew/actions/setup-homebrew@55301c8cac0982bc2fbeb71275fa0b71b963bdb1
+        if: matrix.runner != 'macos-26-intel'
+        timeout-minutes: 5
+        env:
+          # Keep the tap checkout separate so public-install jobs can untap it.
+          GITHUB_ACTIONS_HOMEBREW_SELF_HOSTED: ${{ github.event_name != 'pull_request' && '1' || '' }}
+      - name: Update preinstalled Intel Homebrew
+        if: matrix.runner == 'macos-26-intel'
+        timeout-minutes: 15
+        env:
+          # Skip migrations of unrelated packages preinstalled on this old image.
+          # Formula loading is enabled again for every validation step below.
+          HOMEBREW_DISABLE_LOAD_FORMULA: "1"
+          HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
+          HOMEBREW_NO_INSTALL_FROM_API: ""
+        run: brew update --verbose
+      - name: Tap the checked-out pull request
+        if: github.event_name == 'pull_request'
+        run: |
+          tap_dir="$(brew --repository sethdill/tap)"
+          # The setup action checks out the PR automatically on its runners.
+          if [[ "${{ matrix.runner }}" == macos-26-intel ]]; then
+            brew tap sethdill/tap
+            git -C "$tap_dir" fetch origin "$GITHUB_SHA"
+            git -C "$tap_dir" checkout --detach FETCH_HEAD
+          fi
+          test "$(git -C "$tap_dir" rev-parse HEAD)" = "$GITHUB_SHA"
+          brew trust --formula sethdill/tap/rewrap-markdown
+      - name: Install from the public tap
+        if: github.event_name != 'pull_request'
+        run: |
+          if brew tap | grep -Fxq sethdill/tap; then
+            brew untap sethdill/tap
+          fi
+          brew untrust --tap sethdill/tap
+          brew install sethdill/tap/rewrap-markdown
+      - name: Style
+        run: brew style sethdill/tap/rewrap-markdown
+      - name: Audit
+        run: brew audit --strict --online sethdill/tap/rewrap-markdown
+      - name: Install the pull request formula from source
+        if: github.event_name == 'pull_request'
+        run: brew install --build-from-source --verbose sethdill/tap/rewrap-markdown
+      - name: Test installed CLI
+        run: brew test sethdill/tap/rewrap-markdown
+      - name: Inspect runtime linkage
+        run: brew linkage --test sethdill/tap/rewrap-markdown
+      - name: Remove CLI
+        run: brew uninstall sethdill/tap/rewrap-markdown
