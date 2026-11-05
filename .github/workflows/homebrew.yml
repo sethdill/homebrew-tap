@@ -26,6 +26,9 @@ jobs:
       - uses: Homebrew/actions/setup-homebrew@55301c8cac0982bc2fbeb71275fa0b71b963bdb1
         if: matrix.runner != 'macos-26-intel'
         timeout-minutes: 5
+        env:
+          # Keep the tap checkout separate so public-install jobs can untap it.
+          GITHUB_ACTIONS_HOMEBREW_SELF_HOSTED: ${{ github.event_name != 'pull_request' && '1' || '' }}
       - name: Update preinstalled Intel Homebrew
         if: matrix.runner == 'macos-26-intel'
         timeout-minutes: 15
@@ -39,11 +42,23 @@ jobs:
       - name: Tap the checked-out pull request
         if: github.event_name == 'pull_request'
         run: |
-          brew tap sethdill/tap "$GITHUB_WORKSPACE"
+          tap_dir="$(brew --repository sethdill/tap)"
+          # The setup action checks out the PR automatically on its runners.
+          if [[ "${{ matrix.runner }}" == macos-26-intel ]]; then
+            brew tap sethdill/tap
+            git -C "$tap_dir" fetch origin "$GITHUB_SHA"
+            git -C "$tap_dir" checkout --detach FETCH_HEAD
+          fi
+          test "$(git -C "$tap_dir" rev-parse HEAD)" = "$GITHUB_SHA"
           brew trust --formula sethdill/tap/rewrap-markdown
       - name: Install from the public tap
         if: github.event_name != 'pull_request'
-        run: brew install sethdill/tap/rewrap-markdown
+        run: |
+          if brew tap | grep -Fxq sethdill/tap; then
+            brew untap sethdill/tap
+          fi
+          brew untrust --tap sethdill/tap
+          brew install sethdill/tap/rewrap-markdown
       - name: Style
         run: brew style sethdill/tap/rewrap-markdown
       - name: Audit
