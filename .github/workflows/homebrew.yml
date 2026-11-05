@@ -1,0 +1,59 @@
+name: Homebrew
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  formula:
+    name: Formula (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-26-intel, ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Homebrew/actions/setup-homebrew@55301c8cac0982bc2fbeb71275fa0b71b963bdb1
+        if: matrix.runner != 'macos-26-intel'
+        timeout-minutes: 5
+      - name: Update preinstalled Intel Homebrew
+        if: matrix.runner == 'macos-26-intel'
+        timeout-minutes: 15
+        env:
+          # Skip migrations of unrelated packages preinstalled on this old image.
+          # Formula loading is enabled again for every validation step below.
+          HOMEBREW_DISABLE_LOAD_FORMULA: "1"
+          HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
+          HOMEBREW_NO_INSTALL_FROM_API: ""
+        run: brew update --verbose
+      - name: Tap the checked-out pull request
+        if: github.event_name == 'pull_request'
+        run: |
+          brew tap sethdill/tap "$GITHUB_WORKSPACE"
+          brew trust --formula sethdill/tap/rewrap-markdown
+      - name: Install from the public tap
+        if: github.event_name != 'pull_request'
+        run: brew install sethdill/tap/rewrap-markdown
+      - name: Style
+        run: brew style sethdill/tap/rewrap-markdown
+      - name: Audit
+        run: brew audit --strict --online sethdill/tap/rewrap-markdown
+      - name: Install the pull request formula from source
+        if: github.event_name == 'pull_request'
+        run: brew install --build-from-source --verbose sethdill/tap/rewrap-markdown
+      - name: Test installed CLI
+        run: brew test sethdill/tap/rewrap-markdown
+      - name: Inspect runtime linkage
+        run: brew linkage --test sethdill/tap/rewrap-markdown
+      - name: Remove CLI
+        run: brew uninstall sethdill/tap/rewrap-markdown
